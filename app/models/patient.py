@@ -54,7 +54,7 @@ class EmergencyContact(Base):
     id           = Column(Integer, primary_key=True, index=True)
     patient_id   = Column(Integer, ForeignKey("patients.id"), nullable=False)
     name         = Column(String(100), nullable=False)
-    relationship = Column(String(50), nullable=False)
+    relation_type = Column(String(50), nullable=False)
     phone        = Column(String(15), nullable=False)
     is_primary   = Column(Boolean, default=False)
     created_at   = Column(DateTime, default=datetime.utcnow)
