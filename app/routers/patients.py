@@ -8,7 +8,6 @@ from app.schemas.patient import (
     PatientListResponse
 )
 from app.services import patient as patient_service
-
 router = APIRouter(prefix="/patients", tags=["patients"])
 
 
