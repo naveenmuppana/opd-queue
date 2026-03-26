@@ -16,4 +16,3 @@ class Appointment(Base):
     doctor = relationship("Doctor", back_populates="appointments")
     patient = relationship("Patient", back_populates="appointments")
     # Stop the server with Ctrl+C, then restart
-uvicorn app.main:app --reload
