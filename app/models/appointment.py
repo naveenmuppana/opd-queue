@@ -1,18 +1,44 @@
-from sqlalchemy import Column, Integer, ForeignKey, DateTime, Enum as SAEnum
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Enum as SAEnum, Time, Boolean
 from sqlalchemy.orm import relationship
-from datetime import datetime
+from datetime import datetime, date
 from app.database import Base
-from app.schemas.enums import AppointmentStatus
+from app.schemas.enums import AppointmentStatus, QueuePriority
 
 class Appointment(Base):
     __tablename__ = "appointments"
     
     id = Column(Integer, primary_key=True, index=True)
-    doctor_id = Column(Integer, ForeignKey("doctors.id"))
-    patient_id = Column(Integer, ForeignKey("patients.id"))
+    patient_id = Column(Integer, ForeignKey("patients.id"), nullable=False)
+    doctor_id = Column(Integer, ForeignKey("doctors.id"), nullable=False)
+    appointment_date = Column(DateTime, nullable=False)
+    slot_start_time = Column(Time, nullable=False)
+    slot_end_time = Column(Time, nullable=False)
+    token_number = Column(Integer, nullable=False)
+    queue_priority = Column(SAEnum(QueuePriority), default=QueuePriority.NORMAL)
     status = Column(SAEnum(AppointmentStatus), default=AppointmentStatus.BOOKED)
+    booking_type = Column(String(20), default="counter")  # online, counter
+    is_emergency = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Relationships
+    patient = relationship("Patient", back_populates="appointments")
+    doctor = relationship("Doctor", back_populates="appointments")
+    waiting_list_entry = relationship("WaitingList", back_populates="appointment", uselist=False)
+
+class WaitingList(Base):
+    __tablename__ = "waiting_lists"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    doctor_id = Column(Integer, ForeignKey("doctors.id"), nullable=False)
+    patient_id = Column(Integer, ForeignKey("patients.id"), nullable=False)
+    appointment_date = Column(date, nullable=False)
+    preferred_time = Column(Time, nullable=True)
+    status = Column(String(20), default="waiting")  # waiting, promoted, expired, cancelled
+    position = Column(Integer, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     
-    doctor = relationship("Doctor", back_populates="appointments")
-    patient = relationship("Patient", back_populates="appointments")
-    # Stop the server with Ctrl+C, then restart
+    # Relationships
+    doctor = relationship("Doctor")
+    patient = relationship("Patient")
+    appointment = relationship("Appointment", back_populates="waiting_list_entry")

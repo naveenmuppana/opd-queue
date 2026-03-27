@@ -56,3 +56,4 @@ class DoctorLeave(Base):
     created_at  = Column(DateTime, default=datetime.utcnow)
 
     doctor = relationship("Doctor", back_populates="leaves")
+    appointments = relationship("Appointment", back_populates="doctor")
