@@ -22,6 +22,7 @@ app.add_middleware(
 
 app.include_router(patients.router)
 app.include_router(doctor.router)
+app.include_router(appointment.router)  # Add this line
 
 @app.on_event("startup")
 async def startup():

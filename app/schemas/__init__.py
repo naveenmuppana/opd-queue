@@ -17,3 +17,14 @@ from app.schemas.doctor import (
     DoctorLeaveResponse,
     DoctorAvailabilityResponse,
 )
+from app.schemas.appointment import (
+    AppointmentCreate,
+    AppointmentUpdate,
+    AppointmentResponse,
+    WaitingListCreate,
+    WaitingListResponse,
+    TimeSlot,
+    DoctorAvailabilityRequest,
+    TokenResponse,
+    QueueStatusResponse,
+)
