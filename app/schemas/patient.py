@@ -7,7 +7,7 @@ from app.schemas.enums import PatientType
 
 class EmergencyContactCreate(BaseModel):
     name: str
-    relationship: str
+    relation_type: str
     phone: str
     is_primary: bool = False
 
@@ -23,7 +23,7 @@ class EmergencyContactCreate(BaseModel):
 class EmergencyContactResponse(BaseModel):
     id: int
     name: str
-    relationship: str
+    relation_type: str
     phone: str
     is_primary: bool
 
