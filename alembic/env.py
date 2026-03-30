@@ -1,10 +1,17 @@
 from logging.config import fileConfig
+import os
+from dotenv import load_dotenv
 from sqlalchemy import engine_from_config, pool
 from alembic import context
 from app.database import Base
 from app.models import patient, doctor
-from app.models import *
+from app.models.slot import Slot
+from app.models.appointment import Appointment, WaitingList
+
+load_dotenv()
+
 config = context.config
+config.set_main_option("sqlalchemy.url", os.getenv("database_url"))
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
