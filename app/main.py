@@ -2,7 +2,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 from app.config import settings
-from app.routers import patients, doctor
+from app.routers import patients, doctor, appointment,slot
+
 
 
 app = FastAPI(
