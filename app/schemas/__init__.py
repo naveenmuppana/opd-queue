@@ -1,4 +1,4 @@
-﻿from app.schemas.enums import *
+from app.schemas.enums import *
 from app.schemas.patient import (
     PatientCreate,
     PatientUpdate,
@@ -19,12 +19,13 @@ from app.schemas.doctor import (
 )
 from app.schemas.appointment import (
     AppointmentCreate,
-    AppointmentUpdate,
     AppointmentResponse,
-    WaitingListCreate,
+    AppointmentStatusUpdate,
+    AppointmentListResponse,
     WaitingListResponse,
-    TimeSlot,
-    DoctorAvailabilityRequest,
-    TokenResponse,
-    QueueStatusResponse,
+)
+from app.schemas.slot import (
+    SlotGenerateRequest,
+    SlotResponse,
+    SlotListResponse,
 )

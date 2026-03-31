@@ -1,186 +1,204 @@
-from sqlalchemy.orm import Session
-from sqlalchemy import and_, func
-from datetime import datetime, date, time, timedelta
-from typing import List, Optional
-from app import models, schemas
+﻿from sqlalchemy.orm import Session
+from sqlalchemy import func
+from fastapi import HTTPException
+from datetime import datetime, timezone, date
+from app.models.slot import Slot
+from app.models.appointment import Appointment, WaitingList
+from app.models.doctor import Doctor
+from app.models.patient import Patient
+from app.schemas.appointment import (
+    AppointmentCreate, AppointmentStatusUpdate, WaitingListResponse
+)
+from app.schemas.enums import AppointmentStatus, SlotStatus, WaitingListStatus, QueuePriority
+from loguru import logger
 
-class AppointmentService:
-    def __init__(self, db: Session):
-        self.db = db
-    
-    def get_available_slots(self, doctor_id: int, appointment_date: date) -> List[schemas.TimeSlot]:
-        """Get available time slots for a doctor on a specific date"""
-        
-        # Get doctor's schedule for that day of week
-        day_of_week = appointment_date.strftime("%A").lower()
-        schedule = self.db.query(models.DoctorSchedule).filter(
-            and_(
-                models.DoctorSchedule.doctor_id == doctor_id,
-                models.DoctorSchedule.day_of_week == day_of_week,
-                models.DoctorSchedule.is_active == True,
-                models.DoctorSchedule.valid_from <= appointment_date,
-                models.DoctorSchedule.valid_to >= appointment_date
-            )
-        ).first()
-        
-        if not schedule:
-            return []
-        
-        # Check if doctor is on leave
-        leave = self.db.query(models.DoctorLeave).filter(
-            and_(
-                models.DoctorLeave.doctor_id == doctor_id,
-                models.DoctorLeave.leave_date == appointment_date
-            )
-        ).first()
-        
-        if leave:
-            return []
-        
-        # Get doctor's consultation duration
-        doctor = self.db.query(models.Doctor).filter(models.Doctor.id == doctor_id).first()
-        slot_duration = doctor.consultation_duration_minutes
-        
-        # Generate all possible slots
-        slots = []
-        current_time = schedule.start_time
-        end_time = schedule.end_time
-        
-        while current_time < end_time:
-            slot_end = (datetime.combine(date.today(), current_time) + timedelta(minutes=slot_duration)).time()
-            
-            # Check if slot is already booked
-            booked = self.db.query(models.Appointment).filter(
-                and_(
-                    models.Appointment.doctor_id == doctor_id,
-                    models.Appointment.appointment_date >= datetime.combine(appointment_date, current_time),
-                    models.Appointment.appointment_date < datetime.combine(appointment_date, slot_end),
-                    models.Appointment.status.in_(["booked", "checked_in", "waiting", "called"])
-                )
-            ).first()
-            
-            slots.append(schemas.TimeSlot(
-                start_time=current_time,
-                end_time=slot_end,
-                is_available=not booked,
-                appointment_id=booked.id if booked else None
-            ))
-            
-            current_time = slot_end
-        
-        return slots
-    
-    def create_appointment(self, appointment_data: schemas.AppointmentCreate) -> models.Appointment:
-        """Create a new appointment with token generation"""
-        
-        # Check if slot is available
-        appointment_date = appointment_data.appointment_date.date()
-        slots = self.get_available_slots(appointment_data.doctor_id, appointment_date)
-        
-        slot_available = False
-        for slot in slots:
-            if slot.start_time == appointment_data.slot_start_time and slot.is_available:
-                slot_available = True
-                break
-        
-        if not slot_available:
-            raise ValueError("Selected time slot is not available")
-        
-        # Generate token number
-        max_token = self.db.query(func.max(models.Appointment.token_number)).filter(
-            and_(
-                models.Appointment.doctor_id == appointment_data.doctor_id,
-                models.Appointment.appointment_date >= datetime.combine(appointment_date, time(0,0)),
-                models.Appointment.appointment_date < datetime.combine(appointment_date + timedelta(days=1), time(0,0))
-            )
-        ).scalar() or 0
-        
-        token_number = max_token + 1
-        
-        # Create appointment
-        db_appointment = models.Appointment(
-            **appointment_data.model_dump(),
-            token_number=token_number,
-            queue_priority=schemas.QueuePriority.EMERGENCY if appointment_data.is_emergency else schemas.QueuePriority.NORMAL
+
+def get_doctor_or_404(db: Session, doctor_id: int) -> Doctor:
+    doctor = db.query(Doctor).filter(
+        Doctor.id == doctor_id, Doctor.is_active == True
+    ).first()
+    if not doctor:
+        raise HTTPException(status_code=404, detail="Doctor not found")
+    return doctor
+
+
+def get_patient_or_404(db: Session, patient_id: int) -> Patient:
+    patient = db.query(Patient).filter(
+        Patient.id == patient_id, Patient.is_active == True
+    ).first()
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient not found")
+    return patient
+
+
+def get_slot_or_404(db: Session, slot_id: int) -> Slot:
+    slot = db.query(Slot).filter(Slot.id == slot_id).first()
+    if not slot:
+        raise HTTPException(status_code=404, detail="Slot not found")
+    return slot
+
+
+def get_next_waiting_position(db: Session, doctor_id: int, slot_date: date) -> int:
+    last = db.query(func.max(WaitingList.position)).filter(
+        WaitingList.doctor_id == doctor_id,
+        func.date(WaitingList.appointment_date) == slot_date,
+        WaitingList.status == WaitingListStatus.WAITING
+    ).scalar()
+    return (last or 0) + 1
+
+
+def promote_from_waiting_list(db: Session, slot: Slot):
+    next_waiting = db.query(WaitingList).filter(
+        WaitingList.doctor_id == slot.doctor_id,
+        func.date(WaitingList.appointment_date) == slot.slot_date,
+        WaitingList.status == WaitingListStatus.WAITING
+    ).order_by(WaitingList.position).first()
+
+    if not next_waiting:
+        return
+
+    patient = get_patient_or_404(db, next_waiting.patient_id)
+
+    appointment = Appointment(
+        patient_id       = next_waiting.patient_id,
+        doctor_id        = slot.doctor_id,
+        slot_id          = slot.id,
+        appointment_date = datetime.combine(slot.slot_date, slot.start_time),
+        slot_start_time  = slot.start_time,
+        slot_end_time    = slot.end_time,
+        token_number     = slot.slot_number,
+        status           = AppointmentStatus.BOOKED,
+        booking_type     = next_waiting.appointment.booking_type
+                           if next_waiting.appointment else "counter",
+        queue_priority   = QueuePriority.NORMAL,
+        is_emergency     = False
+    )
+    db.add(appointment)
+    slot.status = SlotStatus.BOOKED
+    next_waiting.status = WaitingListStatus.PROMOTED
+    next_waiting.appointment = appointment
+    db.commit()
+    logger.info(f"Promoted patient {patient.patient_uid} from waiting list into slot {slot.slot_number} on {slot.slot_date}")
+
+
+def create_appointment(db: Session, data: AppointmentCreate) -> Appointment:
+    doctor  = get_doctor_or_404(db, data.doctor_id)
+    patient = get_patient_or_404(db, data.patient_id)
+    slot    = get_slot_or_404(db, data.slot_id)
+
+    if slot.doctor_id != data.doctor_id:
+        raise HTTPException(status_code=400, detail="Slot does not belong to the specified doctor")
+
+    if slot.status != SlotStatus.AVAILABLE:
+        position = get_next_waiting_position(db, data.doctor_id, slot.slot_date)
+        waiting = WaitingList(
+            doctor_id        = data.doctor_id,
+            patient_id       = data.patient_id,
+            appointment_date = datetime.combine(slot.slot_date, slot.start_time),
+            position         = position,
+            status           = WaitingListStatus.WAITING
         )
-        
-        self.db.add(db_appointment)
-        self.db.commit()
-        self.db.refresh(db_appointment)
-        
-        return db_appointment
-    
-    def cancel_appointment(self, appointment_id: int) -> bool:
-        """Cancel appointment and promote waiting list if needed"""
-        
-        appointment = self.db.query(models.Appointment).filter(
-            models.Appointment.id == appointment_id
-        ).first()
-        
-        if not appointment:
-            return False
-        
-        if appointment.status in ["cancelled", "completed", "no_show"]:
-            raise ValueError(f"Cannot cancel appointment with status: {appointment.status}")
-        
-        appointment.status = schemas.AppointmentStatus.CANCELLED
-        self.db.commit()
-        
-        # Check waiting list and promote next patient
-        waiting_entry = self.db.query(models.WaitingList).filter(
-            and_(
-                models.WaitingList.doctor_id == appointment.doctor_id,
-                models.WaitingList.appointment_date == appointment.appointment_date.date(),
-                models.WaitingList.status == "waiting"
-            )
-        ).order_by(models.WaitingList.position).first()
-        
-        if waiting_entry:
-            waiting_entry.status = "promoted"
-            self.db.commit()
-        
-        return True
-    
-    def get_queue_status(self, doctor_id: int, date: date) -> schemas.QueueStatusResponse:
-        """Get current queue status for a doctor"""
-        
-        doctor = self.db.query(models.Doctor).filter(models.Doctor.id == doctor_id).first()
-        
-        # Get all active appointments for the day
-        appointments = self.db.query(models.Appointment).filter(
-            and_(
-                models.Appointment.doctor_id == doctor_id,
-                models.Appointment.appointment_date >= datetime.combine(date, time(0,0)),
-                models.Appointment.appointment_date < datetime.combine(date + timedelta(days=1), time(0,0)),
-                models.Appointment.status.in_(["booked", "checked_in", "waiting", "called", "in_consultation"])
-            )
-        ).order_by(models.Appointment.token_number).all()
-        
-        current_token = None
-        waiting_count = 0
-        queue = []
-        
-        for apt in appointments:
-            if apt.status == "in_consultation":
-                current_token = apt.token_number
-            
-            if apt.status in ["booked", "waiting", "called"]:
-                waiting_count += 1
-            
-            queue.append(schemas.TokenResponse(
-                token_number=apt.token_number,
-                patient_name=apt.patient.name,
-                doctor_name=doctor.name,
-                queue_position=len(queue) + 1,
-                estimated_wait_time=waiting_count * doctor.consultation_duration_minutes,
-                status=apt.status
-            ))
-        
-        return schemas.QueueStatusResponse(
-            doctor_id=doctor_id,
-            doctor_name=doctor.name,
-            current_token=current_token,
-            waiting_count=waiting_count,
-            average_wait_time=doctor.consultation_duration_minutes,
-            queue=queue
-        )
+        db.add(waiting)
+        db.commit()
+        db.refresh(waiting)
+        logger.info(f"Patient {patient.patient_uid} added to waiting list position {position}")
+        raise HTTPException(status_code=202, detail=f"Slot unavailable. Added to waiting list at position {position}")
+
+    appointment = Appointment(
+        patient_id       = data.patient_id,
+        doctor_id        = data.doctor_id,
+        slot_id          = slot.id,
+        appointment_date = datetime.combine(slot.slot_date, slot.start_time),
+        slot_start_time  = slot.start_time,
+        slot_end_time    = slot.end_time,
+        token_number     = slot.slot_number,
+        queue_priority   = data.queue_priority,
+        status           = AppointmentStatus.BOOKED,
+        booking_type     = data.booking_type,
+        is_emergency     = data.is_emergency
+    )
+
+    slot.status = SlotStatus.BOOKED
+    db.add(appointment)
+    db.commit()
+    db.refresh(appointment)
+    logger.info(f"Appointment booked: token {slot.slot_number} | patient {patient.patient_uid} | doctor {doctor.name}")
+    return appointment
+
+
+def get_appointment_by_id(db: Session, appointment_id: int) -> Appointment:
+    appt = db.query(Appointment).filter(Appointment.id == appointment_id).first()
+    if not appt:
+        raise HTTPException(status_code=404, detail="Appointment not found")
+    return appt
+
+
+def get_appointments(
+    db: Session,
+    page: int = 1,
+    per_page: int = 20,
+    doctor_id: int = None,
+    patient_id: int = None,
+    appointment_date: date = None,
+    status: AppointmentStatus = None
+) -> dict:
+    query = db.query(Appointment)
+    if doctor_id:
+        query = query.filter(Appointment.doctor_id == doctor_id)
+    if patient_id:
+        query = query.filter(Appointment.patient_id == patient_id)
+    if appointment_date:
+        query = query.filter(func.date(Appointment.appointment_date) == appointment_date)
+    if status:
+        query = query.filter(Appointment.status == status)
+
+    query = query.order_by(Appointment.token_number)
+    total = query.count()
+    appointments = query.offset((page - 1) * per_page).limit(per_page).all()
+    return {"total": total, "page": page, "per_page": per_page, "appointments": appointments}
+
+
+def update_appointment_status(
+    db: Session, appointment_id: int, data: AppointmentStatusUpdate
+) -> Appointment:
+    appt = get_appointment_by_id(db, appointment_id)
+    appt.status = data.status
+    appt.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(appt)
+    logger.info(f"Appointment {appointment_id} status to {data.status}")
+    return appt
+
+
+def cancel_appointment(db: Session, appointment_id: int) -> dict:
+    appt = get_appointment_by_id(db, appointment_id)
+    if appt.status in [AppointmentStatus.COMPLETED, AppointmentStatus.CANCELLED]:
+        raise HTTPException(status_code=400, detail=f"Cannot cancel appointment with status {appt.status}")
+    appt.status = AppointmentStatus.CANCELLED
+    appt.updated_at = datetime.now(timezone.utc)
+    slot = get_slot_or_404(db, appt.slot_id)
+    slot.status = SlotStatus.AVAILABLE
+    db.commit()
+    promote_from_waiting_list(db, slot)
+    logger.info(f"Appointment {appointment_id} cancelled, slot {slot.slot_number} freed")
+    return {"message": f"Appointment {appointment_id} cancelled successfully"}
+
+
+def get_queue(db: Session, doctor_id: int, appointment_date: date) -> list:
+    return db.query(Appointment).filter(
+        Appointment.doctor_id == doctor_id,
+        func.date(Appointment.appointment_date) == appointment_date,
+        Appointment.status.notin_([
+            AppointmentStatus.COMPLETED,
+            AppointmentStatus.CANCELLED,
+            AppointmentStatus.NO_SHOW
+        ])
+    ).order_by(Appointment.token_number).all()
+
+
+def get_waiting_list(db: Session, doctor_id: int, appointment_date: date) -> list:
+    return db.query(WaitingList).filter(
+        WaitingList.doctor_id == doctor_id,
+        func.date(WaitingList.appointment_date) == appointment_date,
+        WaitingList.status == WaitingListStatus.WAITING
+    ).order_by(WaitingList.position).all()

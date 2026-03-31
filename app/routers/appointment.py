@@ -1,56 +1,83 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+﻿from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
-from typing import List, Optional
+from typing import Optional
 from datetime import date
-
-from app import schemas
 from app.database import get_db
-from app.services.appointment import AppointmentService
+from app.schemas.appointment import (
+    AppointmentCreate,
+    AppointmentResponse,
+    AppointmentStatusUpdate,
+    AppointmentListResponse,
+    WaitingListResponse
+)
+from app.schemas.enums import AppointmentStatus
+from app.services import appointment as appointment_service
 
 router = APIRouter(prefix="/appointments", tags=["appointments"])
 
-@router.get("/available-slots", response_model=List[schemas.TimeSlot])
-def get_available_slots(
-    doctor_id: int = Query(..., description="Doctor ID"),
-    appointment_date: date = Query(..., description="Appointment date"),
+
+@router.post("/", response_model=AppointmentResponse, status_code=status.HTTP_201_CREATED)
+def book_appointment(
+    data: AppointmentCreate,
     db: Session = Depends(get_db)
 ):
-    """Get available time slots for a doctor on a specific date"""
-    service = AppointmentService(db)
-    return service.get_available_slots(doctor_id, appointment_date)
+    return appointment_service.create_appointment(db, data)
 
-@router.post("/", response_model=schemas.AppointmentResponse, status_code=201)
-def create_appointment(
-    appointment: schemas.AppointmentCreate,
+
+@router.get("/queue", response_model=list[AppointmentResponse])
+def get_queue(
+    doctor_id: int,
+    appointment_date: Optional[date] = None,
     db: Session = Depends(get_db)
 ):
-    """Create a new appointment"""
-    service = AppointmentService(db)
-    try:
-        return service.create_appointment(appointment)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    target_date = appointment_date or date.today()
+    return appointment_service.get_queue(db, doctor_id, target_date)
 
-@router.delete("/{appointment_id}", status_code=204)
+
+@router.get("/waiting-list", response_model=list[WaitingListResponse])
+def get_waiting_list(
+    doctor_id: int,
+    appointment_date: date,
+    db: Session = Depends(get_db)
+):
+    return appointment_service.get_waiting_list(db, doctor_id, appointment_date)
+
+
+@router.get("/", response_model=AppointmentListResponse)
+def list_appointments(
+    page: int = Query(1, ge=1),
+    per_page: int = Query(20, ge=1, le=100),
+    doctor_id: Optional[int] = None,
+    patient_id: Optional[int] = None,
+    appointment_date: Optional[date] = None,
+    status: Optional[AppointmentStatus] = None,
+    db: Session = Depends(get_db)
+):
+    return appointment_service.get_appointments(
+        db, page, per_page, doctor_id, patient_id, appointment_date, status
+    )
+
+
+@router.get("/{appointment_id}", response_model=AppointmentResponse)
+def get_appointment(
+    appointment_id: int,
+    db: Session = Depends(get_db)
+):
+    return appointment_service.get_appointment_by_id(db, appointment_id)
+
+
+@router.patch("/{appointment_id}/status", response_model=AppointmentResponse)
+def update_status(
+    appointment_id: int,
+    data: AppointmentStatusUpdate,
+    db: Session = Depends(get_db)
+):
+    return appointment_service.update_appointment_status(db, appointment_id, data)
+
+
+@router.delete("/{appointment_id}", status_code=status.HTTP_200_OK)
 def cancel_appointment(
     appointment_id: int,
     db: Session = Depends(get_db)
 ):
-    """Cancel an appointment"""
-    service = AppointmentService(db)
-    try:
-        if not service.cancel_appointment(appointment_id):
-            raise HTTPException(status_code=404, detail="Appointment not found")
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    return None
-
-@router.get("/queue-status/{doctor_id}", response_model=schemas.QueueStatusResponse)
-def get_queue_status(
-    doctor_id: int,
-    date: date = Query(..., description="Queue date"),
-    db: Session = Depends(get_db)
-):
-    """Get current queue status for a doctor"""
-    service = AppointmentService(db)
-    return service.get_queue_status(doctor_id, date)g
+    return appointment_service.cancel_appointment(db, appointment_id)
