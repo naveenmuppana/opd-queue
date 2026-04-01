@@ -1,6 +1,7 @@
 from sqlalchemy import Column, Integer, String, DateTime, Boolean, Time, Date, Enum as SAEnum, ForeignKey
 from sqlalchemy.orm import relationship
-from datetime import datetime
+from datetime import datetime, timezone
+default=lambda: datetime.now(timezone.utc)
 from app.database import Base
 from app.schemas.enums import DoctorStatus
 
@@ -56,4 +57,4 @@ class DoctorLeave(Base):
     created_at  = Column(DateTime, default=datetime.utcnow)
 
     doctor = relationship("Doctor", back_populates="leaves")
-    appointments = relationship("Appointment", back_populates="doctor")
+    appointments = relationship("Appointment", back_populates="doctor")  # ← delete

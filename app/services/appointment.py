@@ -1,4 +1,4 @@
-﻿from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session
 from sqlalchemy import func
 from fastapi import HTTPException
 from datetime import datetime, timezone, date
@@ -48,6 +48,10 @@ def get_next_waiting_position(db: Session, doctor_id: int, slot_date: date) -> i
 
 
 def promote_from_waiting_list(db: Session, slot: Slot):
+    """
+    When a slot opens up, find the first waiting patient
+    for that doctor on that date and book them into the slot.
+    """
     next_waiting = db.query(WaitingList).filter(
         WaitingList.doctor_id == slot.doctor_id,
         func.date(WaitingList.appointment_date) == slot.slot_date,
@@ -55,10 +59,11 @@ def promote_from_waiting_list(db: Session, slot: Slot):
     ).order_by(WaitingList.position).first()
 
     if not next_waiting:
-        return
+        return  # nobody waiting, slot stays available
 
     patient = get_patient_or_404(db, next_waiting.patient_id)
 
+    # Create appointment for promoted patient
     appointment = Appointment(
         patient_id       = next_waiting.patient_id,
         doctor_id        = slot.doctor_id,
@@ -74,11 +79,20 @@ def promote_from_waiting_list(db: Session, slot: Slot):
         is_emergency     = False
     )
     db.add(appointment)
+
+    # Mark slot as booked
     slot.status = SlotStatus.BOOKED
+
+    # Update waiting list entry
     next_waiting.status = WaitingListStatus.PROMOTED
     next_waiting.appointment = appointment
+
     db.commit()
-    logger.info(f"Promoted patient {patient.patient_uid} from waiting list into slot {slot.slot_number} on {slot.slot_date}")
+    logger.info(
+        f"Promoted patient {patient.patient_uid} "
+        f"from waiting list into slot {slot.slot_number} "
+        f"on {slot.slot_date}"
+    )
 
 
 def create_appointment(db: Session, data: AppointmentCreate) -> Appointment:
@@ -86,9 +100,14 @@ def create_appointment(db: Session, data: AppointmentCreate) -> Appointment:
     patient = get_patient_or_404(db, data.patient_id)
     slot    = get_slot_or_404(db, data.slot_id)
 
+    # Validate slot belongs to this doctor
     if slot.doctor_id != data.doctor_id:
-        raise HTTPException(status_code=400, detail="Slot does not belong to the specified doctor")
+        raise HTTPException(
+            status_code=400,
+            detail="Slot does not belong to the specified doctor"
+        )
 
+    # If slot is taken → go to waiting list
     if slot.status != SlotStatus.AVAILABLE:
         position = get_next_waiting_position(db, data.doctor_id, slot.slot_date)
         waiting = WaitingList(
@@ -101,9 +120,16 @@ def create_appointment(db: Session, data: AppointmentCreate) -> Appointment:
         db.add(waiting)
         db.commit()
         db.refresh(waiting)
-        logger.info(f"Patient {patient.patient_uid} added to waiting list position {position}")
-        raise HTTPException(status_code=202, detail=f"Slot unavailable. Added to waiting list at position {position}")
+        logger.info(
+            f"Patient {patient.patient_uid} added to waiting list "
+            f"position {position} for doctor {doctor.name} on {slot.slot_date}"
+        )
+        raise HTTPException(
+            status_code=202,
+            detail=f"Slot unavailable. Added to waiting list at position {position}"
+        )
 
+    # Book the slot
     appointment = Appointment(
         patient_id       = data.patient_id,
         doctor_id        = data.doctor_id,
@@ -122,7 +148,13 @@ def create_appointment(db: Session, data: AppointmentCreate) -> Appointment:
     db.add(appointment)
     db.commit()
     db.refresh(appointment)
-    logger.info(f"Appointment booked: token {slot.slot_number} | patient {patient.patient_uid} | doctor {doctor.name}")
+
+    logger.info(
+        f"Appointment booked: token {slot.slot_number} | "
+        f"patient {patient.patient_uid} | "
+        f"doctor {doctor.name} | "
+        f"slot {slot.start_time}–{slot.end_time}"
+    )
     return appointment
 
 
@@ -155,6 +187,7 @@ def get_appointments(
     query = query.order_by(Appointment.token_number)
     total = query.count()
     appointments = query.offset((page - 1) * per_page).limit(per_page).all()
+
     return {"total": total, "page": page, "per_page": per_page, "appointments": appointments}
 
 
@@ -166,20 +199,30 @@ def update_appointment_status(
     appt.updated_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(appt)
-    logger.info(f"Appointment {appointment_id} status to {data.status}")
+    logger.info(f"Appointment {appointment_id} status → {data.status}")
     return appt
 
 
 def cancel_appointment(db: Session, appointment_id: int) -> dict:
     appt = get_appointment_by_id(db, appointment_id)
+
     if appt.status in [AppointmentStatus.COMPLETED, AppointmentStatus.CANCELLED]:
-        raise HTTPException(status_code=400, detail=f"Cannot cancel appointment with status {appt.status}")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot cancel appointment with status '{appt.status}'"
+        )
+
     appt.status = AppointmentStatus.CANCELLED
     appt.updated_at = datetime.now(timezone.utc)
+
+    # Free up the slot
     slot = get_slot_or_404(db, appt.slot_id)
     slot.status = SlotStatus.AVAILABLE
     db.commit()
+
+    # Auto-promote first waiting patient
     promote_from_waiting_list(db, slot)
+
     logger.info(f"Appointment {appointment_id} cancelled, slot {slot.slot_number} freed")
     return {"message": f"Appointment {appointment_id} cancelled successfully"}
 

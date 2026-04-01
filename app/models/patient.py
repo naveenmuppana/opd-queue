@@ -2,7 +2,8 @@ from sqlalchemy import Column, Integer, String, DateTime
 from sqlalchemy import Boolean, Date, Numeric, Enum as SAEnum
 from sqlalchemy import ForeignKey
 from sqlalchemy.orm import relationship
-from datetime import datetime
+from datetime import datetime, timezone
+default=lambda: datetime.now(timezone.utc)
 from app.database import Base
 from app.schemas.enums import PatientType
 
@@ -75,3 +76,4 @@ class MedicalHistory(Base):
     created_at      = Column(DateTime, default=datetime.utcnow)
 
     patient = relationship("Patient", back_populates="medical_histories")
+    doctor = relationship("Doctor", backref="medical_histories")

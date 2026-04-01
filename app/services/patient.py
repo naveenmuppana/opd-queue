@@ -37,7 +37,6 @@ def get_patients(
     page: int = 1,
     per_page: int = 20,
     search: str = None,
-    department: str = None
 ) -> dict:
     query = db.query(Patient).filter(Patient.is_active == True)
 

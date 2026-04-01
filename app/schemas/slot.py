@@ -1,5 +1,5 @@
-﻿from pydantic import BaseModel
-from datetime import date, time
+from pydantic import BaseModel
+from datetime import date, time, datetime
 from typing import Optional
 from app.schemas.enums import SlotStatus
 
