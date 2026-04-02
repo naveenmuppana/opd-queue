@@ -1,4 +1,4 @@
-﻿from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 from typing import Optional
 from datetime import date
@@ -75,7 +75,7 @@ def update_status(
     return appointment_service.update_appointment_status(db, appointment_id, data)
 
 
-@router.delete("/{appointment_id}", status_code=status.HTTP_200_OK)
+@router.delete("/{appointment_id}", status_code=status.HTTP_404_NOT_FOUND)
 def cancel_appointment(
     appointment_id: int,
     db: Session = Depends(get_db)
