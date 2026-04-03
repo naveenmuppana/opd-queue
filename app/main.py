@@ -1,10 +1,8 @@
-from fastapi import FastAPI
+﻿from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 from app.config import settings
-from app.routers import patients, doctor, appointment,slot
-
-
+from app.routers import patients, doctor, appointment, slot
 
 app = FastAPI(
     title="OPD Queue Management API",
@@ -23,7 +21,8 @@ app.add_middleware(
 
 app.include_router(patients.router)
 app.include_router(doctor.router)
-app.include_router(appointment.router)  # Add this line
+app.include_router(appointment.router)
+app.include_router(slot.router)
 
 @app.on_event("startup")
 async def startup():
