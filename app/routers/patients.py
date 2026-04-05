@@ -8,6 +8,7 @@ from app.schemas.patient import (
     PatientListResponse
 )
 from app.services import patient as patient_service
+from app.core.deps import require_admin_or_receptionist
 router = APIRouter(prefix="/patients", tags=["patients"])
 
 
@@ -18,7 +19,8 @@ router = APIRouter(prefix="/patients", tags=["patients"])
 )
 def register_patient(
     data: PatientCreate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin_or_receptionist),
 ):
     return patient_service.create_patient(db, data)
 
