@@ -44,4 +44,5 @@ class WaitingList(Base):
     doctor      = relationship("Doctor")
     patient     = relationship("Patient")
     appointment = relationship("Appointment", back_populates="waiting_list_entry")
+    bb
     
