@@ -45,3 +45,4 @@ class WaitingList(Base):
     patient     = relationship("Patient")
     appointment = relationship("Appointment", back_populates="waiting_list_entry")
     
+finaldcjk
